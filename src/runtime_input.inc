@@ -90,6 +90,8 @@ static bool parse_input(const char *name, uint8_t *kind, int *code) {
     return false;
 }
 static void add_binding(const Binding *b) { if (binding_count<MAX_BINDINGS) bindings[binding_count++]=*b; }
+static void wheel_parse(const char *lhs, char *rhs);   /* runtime_wheel.inc */
+static void wheel_config_append(const char *path);
 
 #define LAYOUT_MARKER "# DriveClub racing layout 4"
 static const char default_config[]=
@@ -162,6 +164,7 @@ static void parse_line(char *line) {
         }
         return;
     }
+    if (!strncmp(lhs,"wheel_",6)) { wheel_parse(lhs,rhs); return; }
     if (!strcmp(lhs,"mouse_to_joystick")) { lower(rhs); mouse_target=!strcmp(rhs,"left") ? 1 : !strcmp(rhs,"right") ? 2 : 0; return; }
     if (!strcmp(lhs,"mouse_movement_params")) {
         float a,b,c; if (sscanf(rhs," %f , %f , %f",&a,&b,&c)==3) { mouse_dz_offset=a; mouse_speed=b; mouse_speed_offset=c; }
@@ -223,6 +226,7 @@ static void input_load(void) {
         if ((f=fopen(path,"wb"))) { fwrite(default_config,1,sizeof(default_config)-1,f); fclose(f); }
         f=fopen(path,"rb");
     }
+    if (f) { fclose(f); wheel_config_append(path); f=fopen(path,"rb"); }
     if (f) {
         char line[256];
         while (fgets(line,sizeof line,f)) parse_line(line);

@@ -19,6 +19,13 @@ In the launcher, choose a size per eye under **VR headset (OpenXR)** and press *
 
 The source code is in this repository and the build is on the [Releases](../../releases) page.
 
+## Planned for the next major release
+- **DLSS/FSR Upscaling (not just native DLAA/FSR AA)**
+- **DLSS/FSR Frame Generation, DLSS up to 4X, FSR up to 2X**
+- **DLSS Neural Rendering (Standard and Optimised model support)**
+- **Graphics improvements beyond what the PS4 offered**
+- **Further performance and stability improvements**
+
 ## New in 0.2.0: DLSS and FSR anti-aliasing
 The game's own anti-aliasing is replaced by a modern one, chosen in the launcher:
 - **NVIDIA DLAA** (GeForce RTX) for the sharpest, steadiest picture: thin lines, wires, fences and foliage stay clean.
@@ -43,6 +50,7 @@ Logs are in the `logs` folder.
 - About 60 FPS at 4K in the heaviest scenes on our test PC (RTX 5070 Ti, Ryzen 7 5800X3D), higher in lighter ones, with an unlocked frame rate option in the launcher that keeps the game at its normal speed
 - Runs on NVIDIA, AMD and Intel graphics through Vulkan, with Resizable BAR used automatically where the driver allows it
 - Keyboard racing layout and any gamepad (Xbox, PlayStation, Switch Pro, 8BitDo)
+- Steering wheels with force feedback, pedals with clutch and an H-pattern shifter
 - DLC content (add-on cars, bikes, tours and livery decals) can be unlocked from the launcher, built from your own game files. Cars you earn by playing still unlock through normal progression
 - A launcher window that resizes from every edge and corner and stays sharp at any display scale
 - A `mods` folder for loose-file mods: files in it replace the game's own files of the same path
@@ -66,6 +74,17 @@ Any gamepad works. Keyboard, mouse and gamepad can be used at the same time.
 | Look around | I J K L or the mouse |
 
 F7 turns mouse look on or off. F9 and F10 are the anti-aliasing keys above. F12 hides and shows the FPS counter. The bindings are in `data\user\input_config\default.ini` and can be changed there.
+
+### Steering wheels
+Any wheel that Windows lists as a game controller works: the game sees it as a PS4 wheel, and its force feedback reaches the wheel the way it reached a Logitech wheel on the console. Pedals with a clutch and an H-pattern shifter (on the wheel or as a controller of its own, such as a Logitech Driving Force Shifter on a USB adapter) work too; choose a manual gearbox in the game for the shifter.
+
+1. Connect the wheel, pedals and shifter **before** starting the game.
+2. Run `WheelSetup.exe` next to `DriveClub.exe` once: it asks you to turn the wheel, press each pedal and button and put the shifter in each gear, and writes the result to `default.ini`.
+3. Set the **rotation** in the wheel's own software (Pit House, G HUB, ...) and give `WheelSetup.exe` the same number.
+
+The force feedback follows the game's own setting. In `default.ini`, `wheel_ffb_gain` and `wheel_ffb_vibration` make the forces and the road vibrations stronger or weaker (100 = as the game sends them, up to 400), `wheel_ffb_invert = true` turns them around if the wheel pulls the wrong way, and `wheel_ffb = off` turns force feedback off. `FfbTest.exe` plays single forces on the wheel without the game, to check the directions.
+
+Tested with a Moza R3 and a Logitech Driving Force Shifter. On some PCs Windows takes a long time to list game controllers; the game then starts later and pauses when a controller is plugged in while it runs.
 
 ## Settings
 The window that opens when you start `DriveClub.exe` has every setting. Press **Play** to save them; they are kept for later starts.

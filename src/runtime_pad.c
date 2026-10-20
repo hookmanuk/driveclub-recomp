@@ -22,7 +22,7 @@
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
 #define ERR_ALREADY_OPENED ((int32_t)0x80920004)
 #define ERR_NOT_INITIALIZED ((int32_t)0x80920005)
-#define PAD_HANDLE 1
+#define ERR_TOO_MANY_OPENED ((int32_t)0x80920007)
 
 enum {
     BTN_L3=0x2, BTN_R3=0x4, BTN_OPTIONS=0x8, BTN_UP=0x10, BTN_RIGHT=0x20, BTN_DOWN=0x40, BTN_LEFT=0x80,
@@ -57,7 +57,15 @@ _Static_assert(__builtin_offsetof(PadData,timestamp)==80,"OrbisPadData timestamp
 _Static_assert(sizeof(ControllerInfo)==28,"OrbisPadControllerInformation layout");
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
-static int initialized, opened, sdl_ready;
+static int initialized, sdl_ready;
+/* Every open gets its own handle (1..MAX_HANDLES): the game holds a standard pad (port type 0) and a special one
+ * (type 2, where the console puts wheels) at once, and logiWheel.prx keeps a scePadOpenExt one of its own. All of
+ * them read the one physical pad; the type 2 port is a steering wheel while one is connected (runtime_wheel.inc). */
+#define MAX_HANDLES 16
+static struct { bool used, ext; int32_t user, type, index; } handles[MAX_HANDLES];
+static bool handle_ok(int32_t h) { return h>=1 && h<=MAX_HANDLES && handles[h-1].used; }
+static bool is_wheel_port(int32_t h) { return handle_ok(h) && handles[h-1].type==2 && !handles[h-1].ext; }
+#define PADLOG(name) do { static unsigned n_; if (n_++<4) printf("Runtime: %s from +0x%llx\n",name,(unsigned long long)((uintptr_t)__builtin_return_address(0)-runtime_image_base)); } while (0)
 static SDL_Gamepad *gamepad;
 static size_t reads;
 static uint8_t connected_count;
@@ -80,6 +88,8 @@ static void touch_click(PadData *d, int right) {
 #define compat_mkdir_p(d) mkdir(d,0755)
 #endif
 #include "runtime_input.inc"
+#include "runtime_wheel.inc"
+#include "runtime_logiwheel.inc"
 
 /* ---- motion -------------------------------------------------------------------------
  * Like shadPS4: the pad's sensors pass straight through. Acceleration is reported the way the
@@ -225,12 +235,15 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
     if (sdl_ready<0) return NULL;
+    current_wheel(); /* a wheel that SDL also knows as a gamepad stays the wheel */
     if (gamepad && !SDL_GamepadConnected(gamepad)) { SDL_CloseGamepad(gamepad); gamepad=NULL; }
     if (!gamepad) {
         int count=0;
         SDL_JoystickID *ids=SDL_GetGamepads(&count);
-        if (ids && count>0) {
-            gamepad=SDL_OpenGamepad(ids[0]);
+        int first=0;
+        while (ids && first<count && wheel && ids[first]==wheel_id) ++first;
+        if (ids && first<count) {
+            gamepad=SDL_OpenGamepad(ids[first]);
             if (gamepad) {
                 ++connected_count;
                 printf("Runtime: gamepad connected: %s\n",SDL_GetGamepadName(gamepad));
@@ -528,30 +541,42 @@ static void sample(PadData *d) {
 }
 
 static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }
-/* Opens are keyed like shadPS4's (user, type, index): the same key twice is "already opened", any other
- * logged-in user, port type or index gets the one physical pad. */
-static ABI int32_t pad_open(int32_t user, int32_t type, int32_t index, const void *param) {
-    (void)param;
-    static struct { int32_t user, type, index; } keys[16];
-    static int nkeys;
+/* Opens are keyed like shadPS4's (user, type, index): the same key twice while open is "already opened", any other
+ * logged-in user, port type or index gets the one physical pad. scePadOpenExt opens are keyed apart: logiWheel.prx
+ * holds one on port type 2 for good, and the game's own scePadOpen of that port must still succeed. */
+static int32_t open_port(int32_t user, int32_t type, int32_t index, bool ext) {
     if (!initialized) return ERR_NOT_INITIALIZED;
     if (user<0 || type==1) { printf("Runtime: scePadOpen(user %d, type %d, index %d) -> invalid\n",user,type,index); return ERR_INVALID_ARG; }
     pthread_mutex_lock(&lock);
-    for (int i=0;i<nkeys;++i)
-        if (keys[i].user==user && keys[i].type==type && keys[i].index==index) {
+    int free_slot=-1;
+    for (int i=0;i<MAX_HANDLES;++i) {
+        if (!handles[i].used) { if (free_slot<0) free_slot=i; continue; }
+        if (handles[i].user==user && handles[i].type==type && handles[i].index==index && handles[i].ext==ext) {
             pthread_mutex_unlock(&lock);
             { static int shown; if (shown++ < 3) printf("Runtime: scePadOpen(user %d, type %d, index %d) -> already opened (later ones are not logged)\n",user,type,index); }
             return ERR_ALREADY_OPENED;
         }
-    if (nkeys<16) { keys[nkeys].user=user; keys[nkeys].type=type; keys[nkeys].index=index; ++nkeys; }
-    opened=1;
+    }
+    if (free_slot<0) { pthread_mutex_unlock(&lock); return ERR_TOO_MANY_OPENED; }
+    handles[free_slot].used=true; handles[free_slot].ext=ext;
+    handles[free_slot].user=user; handles[free_slot].type=type; handles[free_slot].index=index;
     pthread_mutex_unlock(&lock);
-    printf("Runtime: pad opened for user %d (type %d, index %d; SDL gamepad or keyboard)\n",user,type,index);
-    return PAD_HANDLE;
+    static unsigned ext_shown;   /* logiWheel.prx opens and closes its port every few seconds */
+    if (!ext || ext_shown++<3)
+        printf("Runtime: pad %d opened for user %d (type %d, index %d%s; SDL gamepad or keyboard%s)\n",free_slot+1,user,type,index,
+               ext ? ", ext; later ones are not logged" : "",type==2 && !ext ? ", or a steering wheel" : "");
+    return free_slot+1;
+}
+static ABI int32_t pad_open(int32_t user, int32_t type, int32_t index, const void *param) {
+    (void)param;
+    return open_port(user,type,index,false);
 }
 static ABI int32_t pad_close(int32_t handle) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
-    opened=0; return 0;
+    pthread_mutex_lock(&lock);
+    const bool ok=handle_ok(handle);
+    if (ok) handles[handle-1].used=false;
+    pthread_mutex_unlock(&lock);
+    return ok ? 0 : ERR_INVALID_HANDLE;
 }
 
 #ifdef _WIN32
@@ -599,10 +624,11 @@ static void watch_install(void *address) {
 }
 #endif
 static ABI int32_t pad_read_state(int32_t handle, PadData *data) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     if (!data) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
     sample(data); ++reads;
+    if (is_wheel_port(handle)) { wheel_sample(data,bbgpu_overlay_captures_input()); wheel_last_read=*data; }
 #ifdef _WIN32
     { static int armed; if (data->buttons && !armed && getenv("DR_WATCH")) { armed=1; watch_install(data); } }
 #endif
@@ -612,32 +638,33 @@ static ABI int32_t pad_read_state(int32_t handle, PadData *data) {
 }
 /* Buffered read: the port samples once per call, so one entry is returned. */
 static ABI int32_t pad_read(int32_t handle, PadData *data, int32_t count) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     if (!data || count<1 || count>64) return ERR_INVALID_ARG;
     pad_read_state(handle,data);
     return 1;
 }
-/* scePadOpenExt: the same standard pad; no extended (wheel) controller is reported. */
-#define PADLOG(name) do { static unsigned n_; if (n_++<4) printf("Runtime: %s from +0x%llx\n",name,(unsigned long long)((uintptr_t)__builtin_return_address(0)-runtime_image_base)); } while (0)
-static ABI int32_t pad_open_ext(int32_t user,int32_t type,int32_t index,const void *param) { return pad_open(user,type==1 ? 0 : type,index,param); }
-static ABI int32_t pad_ext_info(int32_t handle,void *info) { PADLOG("scePadGetExtControllerInformation"); (void)info; return handle==PAD_HANDLE && opened ? ERR_INVALID_ARG : ERR_INVALID_HANDLE; }
+/* scePadOpenExt: the same standard pad; no extended controller is reported, so logiWheel.prx and the game's own
+ * Thrustmaster code leave it alone. A wheel reaches the game as the device class of the type 2 port instead. */
+static ABI int32_t pad_open_ext(int32_t user,int32_t type,int32_t index,const void *param) { (void)param; return open_port(user,type==1 ? 0 : type,index,true); }
+static ABI int32_t pad_ext_info(int32_t handle,void *info) { PADLOG("scePadGetExtControllerInformation"); (void)info; return handle_ok(handle) ? ERR_INVALID_ARG : ERR_INVALID_HANDLE; }
 static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) { PADLOG("scePadGetControllerInformation");
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     if (!info) return ERR_INVALID_ARG;
     memset(info,0,sizeof(*info));
     info->pixel_density=44.86f; info->resolution_x=1920; info->resolution_y=943;
     info->dead_zone_left=info->dead_zone_right=2;
-    info->connection_type=0; info->connected=1; info->device_class=0;
+    info->connection_type=0; info->connected=1; info->device_class=DEVICE_CLASS_STANDARD;
     pthread_mutex_lock(&lock);
     current_gamepad();
     info->connected_count=connected_count ? connected_count : 1;
+    if (is_wheel_port(handle) && current_wheel()) info->device_class=DEVICE_CLASS_STEERING_WHEEL;
     pthread_mutex_unlock(&lock);
     return 0;
 }
 /* Like shadPS4: the console's {large, small} motor pair goes to SDL as {low, high} frequency motors, held until the next
  * call (the game sends 0, 0 to stop). */
 static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     { static unsigned n; if (n++<12 || ((param[0] || param[1]) && n<200)) printf("Runtime: scePadSetVibration large %u small %u\n",param[0],param[1]); }
     pthread_mutex_lock(&lock);
@@ -656,7 +683,7 @@ static void apply_light(void) {
     SDL_SetGamepadLED(g,c[0],c[1],c[2]);
 }
 static ABI int32_t pad_light_bar(int32_t handle, const uint8_t *param) { PADLOG("scePadSetLightBar");
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
     current_gamepad();
@@ -666,7 +693,7 @@ static ABI int32_t pad_light_bar(int32_t handle, const uint8_t *param) { PADLOG(
     return 0;
 }
 static ABI int32_t pad_reset_light_bar(int32_t handle) { PADLOG("scePadResetLightBar");
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     pthread_mutex_lock(&lock);
     current_gamepad();
     light_rgb[0]=0; light_rgb[1]=0; light_rgb[2]=255;
@@ -674,9 +701,9 @@ static ABI int32_t pad_reset_light_bar(int32_t handle) { PADLOG("scePadResetLigh
     pthread_mutex_unlock(&lock);
     return 0;
 }
-static ABI int32_t pad_ok_handle(int32_t handle) { return handle==PAD_HANDLE && opened ? 0 : ERR_INVALID_HANDLE; }
+static ABI int32_t pad_ok_handle(int32_t handle) { return handle_ok(handle) ? 0 : ERR_INVALID_HANDLE; }
 static ABI int32_t pad_reset_orientation(int32_t handle) { PADLOG("scePadResetOrientation");
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (!handle_ok(handle)) return ERR_INVALID_HANDLE;
     motion.q[0]=motion.q[1]=motion.q[2]=0.0f; motion.q[3]=1.0f;
     fusion_reset();
     return 0;
@@ -687,11 +714,17 @@ static const RuntimeExport exports[]={
     {"scePadInit",pad_init}, {"scePadOpenExt",pad_open_ext}, {"scePadGetExtControllerInformation",pad_ext_info}, {"scePadOpen",pad_open}, {"scePadClose",pad_close},
     {"scePadReadState",pad_read_state}, {"scePadRead",pad_read},
     {"scePadGetControllerInformation",pad_info}, {"scePadSetVibration",pad_vibration},
+    {"scePadDeviceClassGetExtendedInformation",pad_device_class_extended_info}, {"scePadDeviceClassParseData",pad_device_class_parse},
     {"scePadResetOrientation",pad_reset_orientation},
     {"scePadSetLightBar",pad_light_bar}, {"scePadSetLightBarForTracker",pad_light_bar}, {"scePadResetLightBar",pad_reset_light_bar},
     {"scePadSetLightBarBaseBrightness",pad_ok_handle_flag}, {"scePadSetLightBarBlinking",pad_ok_handle_flag}, {"scePadSetVibrationForce",pad_ok_handle_flag},
     {"scePadSetAngularVelocityDeadbandState",pad_ok_handle_flag}, {"scePadSetTiltCorrectionState",pad_ok_handle_flag},
     {"scePadSetMotionSensorState",pad_ok_handle_flag},
 };
-uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
-void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
+uintptr_t runtime_pad_resolve(const char *name) {
+    /* logiWheel.prx's exports have no public names: matched by NID, ahead of the module's own code */
+    for (size_t i=0;i<sizeof(logi_exports)/sizeof(*logi_exports);++i)
+        if (!strncmp(name,logi_exports[i].nid,11) && name[11]=='#') return (uintptr_t)logi_exports[i].function;
+    return RUNTIME_LOOKUP(exports,name);
+}
+void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s, wheel=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none",wheel ? SDL_GetJoystickName(wheel) : "none"); }
