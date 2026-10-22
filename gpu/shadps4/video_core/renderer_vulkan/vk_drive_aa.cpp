@@ -87,23 +87,23 @@ bool DriveAA::Upscaling() const {
 }
 
 float DriveAA::MipBias() const {
-    // VR fork, test flag BB_DLSS_MIP_BIAS_EXTRA=<bias> (e.g. -1): added to the bias, with DLAA too. NVIDIA's DLSS guide
-    // asks for log2(render / output) - 1; this has been log2(render / output) alone, a mip level softer than that.
-    static const float extra = [] {
-        const char* v = std::getenv("BB_DLSS_MIP_BIAS_EXTRA");
-        return v ? std::clamp(float(std::atof(v)), -3.0f, 0.0f) : 0.0f;
-    }();
+    // VR fork: in VR one mip level sharper again (with DLAA too), as NVIDIA's DLSS guide asks: log2(render / output) - 1.
+    // BB_DLSS_MIP_BIAS_EXTRA=<bias> sets that extra (0 for the old bias).
+    static const char* const extra_env = std::getenv("BB_DLSS_MIP_BIAS_EXTRA");
+    static const float extra_set = extra_env ? std::clamp(float(std::atof(extra_env)), -3.0f, 0.0f) : 0.0f;
     if (!Active()) {
         return 0.0f;
     }
+    const float extra = extra_env ? extra_set : (Vr::Dlss::Active() ? -1.0f : 0.0f);
     return (Upscaling() ? -std::log2(BbSettings::AaScaleFactor(BbSettings::Get().aa_scale)) : 0.0f) + extra;
 }
 
 bool DriveAA::MipBiasAllPasses() {
-    // VR fork, test flag BB_DLSS_MIP_BIAS_PASSES=all: the bias for every pass drawing with the scene depth (forward and
-    // transparent materials, decals), not only the G-buffer passes.
-    static const bool all = std::getenv("BB_DLSS_MIP_BIAS_PASSES") && std::string_view(std::getenv("BB_DLSS_MIP_BIAS_PASSES")) == "all";
-    return all;
+    // VR fork: in VR the bias is for every pass drawing with the scene depth (forward and transparent materials,
+    // decals), not only the G-buffer passes. BB_DLSS_MIP_BIAS_PASSES=gbuffer: the G-buffer passes only.
+    static const bool gbuffer_only = std::getenv("BB_DLSS_MIP_BIAS_PASSES") &&
+                                     std::string_view(std::getenv("BB_DLSS_MIP_BIAS_PASSES")) == "gbuffer";
+    return !gbuffer_only && Vr::Dlss::Active();
 }
 
 bool DriveAA::RedirectVr(vk::ImageView& view, vk::ImageLayout& layout, vk::ComponentMapping mapping) {
@@ -132,12 +132,12 @@ void DriveAA::NextFrame() {
         std::chrono::steady_clock::now() - last_run > std::chrono::milliseconds(300)) {
         redirect_valid = false;
     }
-    // VR fork, test flag BB_DLSS_JITTER_PER_FRAME=1: one step per anti-aliasing pass. This runs for every draw into
-    // the display buffer (the scene's copy and each HUD draw), so a frame moves the sequence on by its draw count: in
-    // VR at 3200 it went 9 of the 18 phases, x never negative (logged 2026-10-22).
-    static const bool per_frame =
-        std::getenv("BB_DLSS_JITTER_PER_FRAME") && std::getenv("BB_DLSS_JITTER_PER_FRAME")[0] == '1';
-    if (per_frame && !std::exchange(jitter_used, false)) {
+    // VR fork: in VR one step per anti-aliasing pass. This runs for every draw into the display buffer (the scene's
+    // copy and each HUD draw), so a frame moved the sequence on by its draw count: at 3200 it went 9 of the 18 phases,
+    // x never negative (logged 2026-10-22). BB_DLSS_JITTER_PER_FRAME=0: the old stepping.
+    static const bool per_draw =
+        std::getenv("BB_DLSS_JITTER_PER_FRAME") && std::getenv("BB_DLSS_JITTER_PER_FRAME")[0] == '0';
+    if (!per_draw && Vr::Dlss::Active() && !std::exchange(jitter_used, false)) {
         return;
     }
     jitter_index = jitter_index % phases + 1;
@@ -318,7 +318,7 @@ void DriveAA::OnTaa(VideoCore::ImageId color_id, VideoCore::ImageId depth_id,
             std::puts("");
         }
     };
-    jitter_used = true; // VR fork (BB_DLSS_JITTER_PER_FRAME)
+    jitter_used = true; // VR fork: the jitter steps once per pass (NextFrame)
     if (!Active() || !color_id || !depth_id || !output_id) {
         return skip("no image");
     }

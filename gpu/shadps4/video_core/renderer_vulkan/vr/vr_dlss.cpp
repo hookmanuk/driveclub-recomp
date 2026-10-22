@@ -74,7 +74,8 @@ struct State {
     // Armed by the main view's camera (its G-buffer draws), spent by the frame's DLSS.
     std::atomic<bool> armed{false};
     VideoCore::ImageId lit{}; // the frame's lit scene (the rasterizer's thread)
-    VideoCore::ImageId composite{}; // BB_DLSS_AT=composite: drawn by the last draw, DLSS at this one
+    VideoCore::ImageId composite{}; // drawn by the last draw, DLSS at this one (AaInput)
+    bool composite_seen = false;    // the game draws the composite (else DLSS stays on the lit scene)
 } g;
 
 using Mat = std::array<float, 16>;
@@ -336,9 +337,11 @@ void OnDispatch(VideoCore::TextureCache& texture_cache, const Shader::Info& cs, 
 }
 
 VideoCore::ImageId AaInput(u64 vs_hash, u64 ps_hash, VideoCore::ImageId color0) {
-    static const bool at_composite =
-        std::getenv("BB_DLSS_AT") && std::string_view(std::getenv("BB_DLSS_AT")) == "composite";
-    if (at_composite) {
+    static const bool at_lit = std::getenv("BB_DLSS_AT") && std::string_view(std::getenv("BB_DLSS_AT")) == "lit";
+    if (!at_lit && ps_hash == 0x9eff1777ULL) {
+        g.composite_seen = true;
+    }
+    if (!at_lit && g.composite_seen) {
         if (!g.lit || !g.armed.load(std::memory_order_relaxed) || !Active()) {
             return {};
         }

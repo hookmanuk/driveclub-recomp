@@ -103,7 +103,7 @@ private:
     u32 frame_id = 0;
     u32 jitter_index = 0;
     std::array<float, 2> jitter{};
-    bool jitter_used = true; ///< VR fork: an anti-aliasing pass took the jitter (BB_DLSS_JITTER_PER_FRAME)
+    bool jitter_used = true; ///< VR fork: an anti-aliasing pass took the jitter (NextFrame steps it then)
     std::chrono::steady_clock::time_point last_frame{};
 
     FfxVkPortableUpscaleContext* context = nullptr;

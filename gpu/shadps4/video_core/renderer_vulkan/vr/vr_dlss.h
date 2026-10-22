@@ -43,10 +43,10 @@ void OnDispatch(VideoCore::TextureCache& texture_cache, const Shader::Info& cs, 
 /// The rasterizer, before each draw: in VR the game's own anti-aliasing is off (with motion blur and depth of field,
 /// the VR patch set), so DLSS runs on the lit scene when it is finished: at the first draw of the bloom (vertex shader
 /// 0xb834cdf9) after the main view's G-buffer. The lit scene then, else none.
-/// Test flag BB_DLSS_AT=composite: DLSS runs on the scene's composite instead, at the next draw after the one drawing
-/// it (pixel shader 0x9eff1777 copies the finished lit scene into it, at the render size, for the display pass). On
-/// the lit scene, an upscaled result went through that copy back down to the render size and up again in the display
-/// pass: blurred, and fine detail doubled.
+/// Once the scene's composite has been seen, DLSS runs on it instead, at the next draw after the one drawing it (pixel
+/// shader 0x9eff1777 copies the finished lit scene into it, at the render size, for the display pass). On the lit
+/// scene, an upscaled result went through that copy back down to the render size and up again in the display pass:
+/// blurred, and fine detail doubled. BB_DLSS_AT=lit: the lit scene always.
 VideoCore::ImageId AaInput(u64 vs_hash, u64 ps_hash = 0, VideoCore::ImageId color0 = {});
 
 /// Stereo::OnDraw, each G-buffer draw: its vertex shader's 512-byte camera constants (dwords 0-15 the camera-relative
