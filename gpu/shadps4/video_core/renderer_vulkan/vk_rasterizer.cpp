@@ -1310,7 +1310,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         BbStats::PhaseTimer timer{BbStats::phase_ns[2]};
         PrepareRenderState(pipeline);
     }
-    if (const auto lit = Vr::Dlss::AaInput(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash); lit && drive_aa->Active() && fg_depth) {
+    if (const auto lit = Vr::Dlss::AaInput(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash, pipeline->GetStages()[u32(Shader::SwStage::Fragment)] ? pipeline->GetStages()[u32(Shader::SwStage::Fragment)]->pgm_hash : 0, cb_descs[0].first); lit && drive_aa->Active() && fg_depth) {
         drive_aa->OnTaa(lit, fg_depth, lit); // VR: DLSS on the finished lit scene, before the post-processing
     }
     Vr::Stereo::LogFragmentImages(pipeline->GetStage(Shader::SwStage::Vertex), // VR: development
@@ -1606,7 +1606,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     motion_draw = false;
     motion_geometry = 0;
     PrepareRenderState(pipeline);
-    if (const auto lit = Vr::Dlss::AaInput(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash); lit && drive_aa->Active() && fg_depth) {
+    if (const auto lit = Vr::Dlss::AaInput(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash, pipeline->GetStages()[u32(Shader::SwStage::Fragment)] ? pipeline->GetStages()[u32(Shader::SwStage::Fragment)]->pgm_hash : 0, cb_descs[0].first); lit && drive_aa->Active() && fg_depth) {
         drive_aa->OnTaa(lit, fg_depth, lit); // VR: DLSS on the finished lit scene, before the post-processing
     }
     Vr::Stereo::LogFragmentImages(pipeline->GetStage(Shader::SwStage::Vertex), // VR: development
@@ -2071,9 +2071,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
             reported = sampler_lod_bias;
             std::printf("Upscaler: scene texture LOD bias %.2f\n", sampler_lod_bias);
         }
-    } else if (!pipeline->IsCompute() && drive_aa->Upscaling() &&
-               std::popcount(static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask &
-                             0xff) == 3) {
+    } else if (!pipeline->IsCompute() && drive_aa->MipBias() != 0.0f &&
+               (std::popcount(static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask & 0xff) == 3 ||
+                (DriveAA::MipBiasAllPasses() && db_desc.first && db_desc.first == fg_depth))) { // VR fork: test flags
         // The G-buffer passes: material textures at the output size's detail.
         sampler_lod_bias = drive_aa->MipBias();
     }

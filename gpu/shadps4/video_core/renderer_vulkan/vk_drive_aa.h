@@ -44,6 +44,7 @@ public:
     [[nodiscard]] bool Upscaling() const;
     /// Texture LOD bias for the scene's material textures while upscaling: log2(render / output).
     [[nodiscard]] float MipBias() const;
+    static bool MipBiasAllPasses(); ///< VR fork, test flag (vk_drive_aa.cpp)
 
     /// While upscaled: later reads of the game's anti-aliasing result by normalized sampling see
     /// the upscaled picture instead (its passes sample by UV, so the size does not matter).
@@ -102,6 +103,7 @@ private:
     u32 frame_id = 0;
     u32 jitter_index = 0;
     std::array<float, 2> jitter{};
+    bool jitter_used = true; ///< VR fork: an anti-aliasing pass took the jitter (BB_DLSS_JITTER_PER_FRAME)
     std::chrono::steady_clock::time_point last_frame{};
 
     FfxVkPortableUpscaleContext* context = nullptr;
