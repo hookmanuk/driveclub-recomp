@@ -172,10 +172,13 @@ void PollHotkeys() {
         remembered = s.aa_mode;
         g_aa_used = true;
     }
-    if (f9 && !f9_down) {
+    // VR fork: not in VR. VR has DLSS only (vr_dlss.cpp): F10's FSR left the camera jitter running with nothing to
+    // resolve it (the picture shook), and F9 then switched between off and that (Matt 2026-10-23).
+    static const bool vr = std::getenv("BB_VR") != nullptr;
+    if (f9 && !f9_down && !vr) {
         s.aa_mode = s.aa_mode != BbSettings::AaOff ? int(BbSettings::AaOff) : remembered;
     }
-    if (f10 && !f10_down && s.dlss_supported) { // DLSS only where this card can run it
+    if (f10 && !f10_down && s.dlss_supported && !vr) { // DLSS only where this card can run it
         remembered = remembered == BbSettings::AaDlss ? int(BbSettings::AaFsr3)
                                                       : int(BbSettings::AaDlss);
         if (s.aa_mode != BbSettings::AaOff) {
