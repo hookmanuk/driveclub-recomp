@@ -285,17 +285,17 @@ int VrEye() {
   static const int kEye[] = {0, 1080, 1600, 2160, 2560, 2880, 3200, 3584, 3840, 4320};
   return VrOn() ? kEye[g_c[g_vr].sel] : 0;
 }
-// VR fork: the "Experimental options" toggle in the VR card shows the "VR EXPERIMENTAL" card below it (VR DLSS, its
-// model, the sharpening); off, those settings keep their saved values but do not apply.
-int g_vrexp = -1;            // the toggle
-bool vr_experimental = false;  // its saved state ("vr_experimental=" in launcher.ini)
-int g_exp_card = -1;         // the card's index in g_cards
+// VR fork: VR DLSS, its model and the sharpening are rows of the VR card, shown with a headset size. They were in a
+// "VR EXPERIMENTAL" card behind an "Experimental options" toggle until 0.2.5-vr1.3 (Matt 2026-10-23: out of
+// experimental); a launcher.ini that saved the toggle off keeps DLSS and sharpening off once (vr_experimental=0).
+int g_vrexp = -1;            // the old toggle: no longer made
+int vr_experimental = -1;    // the old toggle's saved state ("vr_experimental=" in launcher.ini), -1 none
+int g_exp_card = -1;         // the old card: no longer made
 int g_flat_card = -1, g_aa_card = -1, g_tex_card = -1;  // VR off: frame rate and resolution, anti-aliasing; VR on:
                                                          // texture filtering (anisotropic filtering alone)
-bool ExperimentalOn() { return g_vrexp >= 0 && g_c[g_vrexp].sel != 0; }
 bool CardHidden(size_t k);
 bool CtlHidden(int i);
-int VrDlss() { return VrOn() && ExperimentalOn() && g_vrdlss >= 0 ? g_c[g_vrdlss].sel : 0; }  // 0 off, 1 DLAA, 2.. upscaling
+int VrDlss() { return VrOn() && g_vrdlss >= 0 ? g_c[g_vrdlss].sel : 0; }  // 0 off, 1 DLAA, 2.. upscaling
 // The render size per eye: the eye size, or below it by the DLSS mode's factor (a multiple of 16, as the
 // "VR render" patches in DriveClub.xml).
 int VrRender() {
@@ -747,10 +747,6 @@ void BuildModel() {
                   L"Performance. J is like K with a little less ghosting and more flicker; M and L are the transformer "
                   L"presets for the faster modes; F is the older CNN model (deprecated).",
                   {L"Default", L"K", L"J", L"M", L"L", L"F"}, {"@vrmodel", "", "", "", "", ""}, 0);
-  g_vrexp = toggle(L"Experimental options",
-                   L"Shows the VR EXPERIMENTAL section below: VR DLSS, its model and the sharpening. Still in "
-                   L"development: they may have graphical bugs. Off, those settings are not used.",
-                   "@vrexp", false);
   g_drive_preset = seg(L"Driving preset",
                        L"Sets the four rows below in one click. Sim: manual gears, no assists, hardcore handling. Assisted: automatic gears and help with braking and steering. Game Defaults: the game's own Options menu decides.",
                        {L"Sim", L"Assisted", L"Game Defaults"}, {"@drive_preset", "", ""}, 2);
@@ -812,10 +808,8 @@ void BuildModel() {
   // the VR card first on the Graphics tab, at the top of the first column, the experimental card right below it. With
   // a headset size the VR patch set stands in for the frame rate, resolution and anti-aliasing rows (VrReplaces):
   // those cards show only with VR off.
-  g_cards.push_back({L"VR", {g_vr, g_vrexp}, 0, kTabGraphics, L"Stereo 3D with head tracking on a PC VR headset."});
-  g_exp_card = int(g_cards.size());
-  g_cards.push_back({L"VR EXPERIMENTAL", {g_vrdlss, g_vrmodel, g_vrsharp}, 0, kTabGraphics,
-                     L"Still in development: may have graphical bugs."});
+  g_cards.push_back({L"VR", {g_vr, g_vrdlss, g_vrmodel, g_vrsharp}, 0, kTabGraphics,
+                     L"Stereo 3D with head tracking on a PC VR headset."});
   g_flat_card = int(g_cards.size());
   g_cards.push_back({L"FRAME RATE AND RESOLUTION", {g_preset, fps, outres, inres, wide, fov}, 0, kTabGraphics});
   g_aa_card = int(g_cards.size());
@@ -934,7 +928,7 @@ void LoadSettings() {
     if (line.rfind("vr_dlss=", 0) == 0) vrdlss_saved = atoi(line.substr(8).c_str());  // VR fork
     if (line.rfind("vr_sharpness=", 0) == 0) vrsharp_saved = atoi(line.substr(13).c_str());  // VR fork
     if (line.rfind("vr_model=", 0) == 0) vrmodel_saved = atoi(line.substr(9).c_str());  // VR fork
-    if (line.rfind("vr_experimental=", 0) == 0) vr_experimental = line.substr(16) == "1";  // VR fork
+    if (line.rfind("vr_experimental=", 0) == 0) vr_experimental = line.substr(16) == "1" ? 1 : 0;  // VR fork
     if (line.rfind("dlc_unlock=", 0) == 0) unlock_dlc = line.substr(11) == "1";  // the "unlock=" of earlier versions is not read: off for everyone
     if (line.rfind("bench_track=", 0) == 0) g_bench_track = FindBench(kBenchTracks, kBenchTrackCount, line.substr(12), 0);
     if (line.rfind("bench_car=", 0) == 0) g_bench_car = FindBench(kBenchCars, kBenchCarCount, line.substr(10), kBenchDefaultCar);
@@ -982,10 +976,6 @@ void LoadSettings() {
       c.sel = unlock_dlc ? 1 : 0;
       continue;
     }
-    if (c.kind == Kind::Toggle && c.patches[0] == "@vrexp") {  // VR fork
-      c.sel = vr_experimental ? 1 : 0;
-      continue;
-    }
     if (!has_selection || IsBenchRow(c) || IsWheelRow(c) || IsDriveRow(c)) continue;  // defaults; the benchmark and driving rows are in launcher.ini, the wheel's in default.ini
     c.sel = 0;
     for (size_t i = 0; i < c.patches.size(); ++i) {
@@ -1004,6 +994,7 @@ void LoadSettings() {
   if (g_aa >= 0 && aa_saved >= 1 && aa_saved <= 2) g_c[g_aa].sel = aa_saved;
   if (g_fgen >= 0 && fgen_saved >= 1 && fgen_saved <= 4) g_c[g_fgen].sel = fgen_saved;
   if (g_fps >= 0 && unlocked_saved && g_c[g_fps].sel == 1) g_c[g_fps].sel = 3;
+  if (vr_experimental == 0) vrdlss_saved = vrsharp_saved = 0;  // VR fork: saved with the old toggle off (above)
   if (g_vrdlss >= 0 && vrdlss_saved >= 1 && vrdlss_saved <= 4) g_c[g_vrdlss].sel = vrdlss_saved;  // VR fork
   if (g_vrmodel >= 0 && vrmodel_saved >= 1 && vrmodel_saved <= 5) g_c[g_vrmodel].sel = vrmodel_saved;  // VR fork
   if (g_vrsharp >= 0 && vrsharp_saved >= 1 && vrsharp_saved <= 5) g_c[g_vrsharp].sel = vrsharp_saved;  // VR fork  // Unlocked is deltatime without the cap
@@ -1102,7 +1093,7 @@ void SaveSettings() {
       if (c.kind == Kind::Toggle && c.patches[0] == "@autoplay") g_auto_play = c.sel != 0;
     }
     ini << "update=" << Narrow(g_folder[0].path) << "\r\nbase=" << Narrow(g_folder[1].path) << "\r\nfps=" << (fps_on ? 1 : 0)
-        << "\r\nfast=" << (fast_on ? 1 : 0) << "\r\nunlocked=" << ((g_fps >= 0 && g_c[g_fps].sel == 3) ? 1 : 0) << "\r\nskip_gpu_check=" << (g_skip_gpu_check ? 1 : 0) << "\r\nmirror=" << (g_mirror >= 0 ? g_c[g_mirror].sel : 0) << "\r\nlanguage=" << g_lang_id << "\r\naniso=" << (g_aniso >= 0 ? g_c[g_aniso].sel : 0) << "\r\nup=" << (g_up >= 0 ? g_c[g_up].sel : 0) << "\r\naa=" << (g_aa >= 0 ? g_c[g_aa].sel : 0) << "\r\nfgen=" << (g_fgen >= 0 ? g_c[g_fgen].sel : 0) <<"\r\nname=" << Narrow(g_name) <<"\r\nfull=" << (full_on ? 1 : 0) << "\r\ndlc_unlock=" << (unlock_on ? 1 : 0) << "\r\noverlays=" << (g_allow_overlays ? 1 : 0) << "\r\nauto_play=" << (g_auto_play ? 1 : 0) << "\r\nvr_dlss=" << (g_vrdlss >= 0 ? g_c[g_vrdlss].sel : 0) << "\r\nvr_sharpness=" << (g_vrsharp >= 0 ? g_c[g_vrsharp].sel : 0) << "\r\nvr_model=" << (g_vrmodel >= 0 ? g_c[g_vrmodel].sel : 0) << "\r\nvr_experimental=" << (ExperimentalOn() ? 1 : 0) << "\r\n";
+        << "\r\nfast=" << (fast_on ? 1 : 0) << "\r\nunlocked=" << ((g_fps >= 0 && g_c[g_fps].sel == 3) ? 1 : 0) << "\r\nskip_gpu_check=" << (g_skip_gpu_check ? 1 : 0) << "\r\nmirror=" << (g_mirror >= 0 ? g_c[g_mirror].sel : 0) << "\r\nlanguage=" << g_lang_id << "\r\naniso=" << (g_aniso >= 0 ? g_c[g_aniso].sel : 0) << "\r\nup=" << (g_up >= 0 ? g_c[g_up].sel : 0) << "\r\naa=" << (g_aa >= 0 ? g_c[g_aa].sel : 0) << "\r\nfgen=" << (g_fgen >= 0 ? g_c[g_fgen].sel : 0) <<"\r\nname=" << Narrow(g_name) <<"\r\nfull=" << (full_on ? 1 : 0) << "\r\ndlc_unlock=" << (unlock_on ? 1 : 0) << "\r\noverlays=" << (g_allow_overlays ? 1 : 0) << "\r\nauto_play=" << (g_auto_play ? 1 : 0) << "\r\nvr_dlss=" << (g_vrdlss >= 0 ? g_c[g_vrdlss].sel : 0) << "\r\nvr_sharpness=" << (g_vrsharp >= 0 ? g_c[g_vrsharp].sel : 0) << "\r\nvr_model=" << (g_vrmodel >= 0 ? g_c[g_vrmodel].sel : 0) << "\r\n";
     ini << "bench_track=" << kBenchTracks[g_bench_track].id << "\r\nbench_car=" << kBenchCars[g_bench_car].id
         << "\r\nbench_mode=" << g_c[g_bmode].sel << "\r\nbench_tod=" << g_c[g_btod].sel << "\r\nbench_weather=" << g_c[g_bweather].sel
         << "\r\nbench_rain=" << g_c[g_brain].sel << "\r\nbench_length=" << g_c[g_blen].sel << "\r\n";
@@ -1183,12 +1174,13 @@ bool g_folders_in_flow = false;  // the folders card sits in a column (3+ column
 bool g_size_without_exp = false;
 bool CardHidden(size_t k) {
   const int i = int(k);
-  if (i == g_exp_card) return !VrOn() || !ExperimentalOn() || g_size_without_exp;
+  if (i == g_exp_card) return true;  // the old experimental card (none made)
   if (i == g_flat_card || i == g_aa_card) return VrOn();
   if (i == g_tex_card) return !VrOn();
   return false;
 }
-bool CtlHidden(int i) { return i == g_vrexp && !VrOn(); }  // the experimental toggle: VR only
+// VR fork: the VR DLSS, model and sharpening rows show with a headset size only.
+bool CtlHidden(int i) { return !VrOn() && i >= 0 && (i == g_vrdlss || i == g_vrmodel || i == g_vrsharp); }
 
 void LayoutPass(float bottom_extra) {
   g_cols = (std::clamp)(int((g_win_w - 2 * kMargin + kGap) / (380.f + kGap)), 2, 4);
@@ -2142,7 +2134,7 @@ std::wstring StartGame(HANDLE* process = nullptr) {
       // Matt 2026-10-22: twice LumaSharpen's strength per step, and twice its limit (0.07; at 0.035 the stronger
       // steps hit the limit and changed little).
       static const wchar_t* const kSharp[] = {L"0", L"0.8,0.07", L"1.3,0.07", L"2.0,0.07", L"3.0,0.07", L"5.0,0.07"};
-      const int s = g_vrsharp >= 0 && ExperimentalOn() ? g_c[g_vrsharp].sel : 0;
+      const int s = g_vrsharp >= 0 && VrOn() ? g_c[g_vrsharp].sel : 0;
       SetEnvironmentVariableW(L"BB_VR_SHARPEN", kSharp[s >= 0 && s <= 5 ? s : 0]);
     }
     SetEnvironmentVariableW(L"BB_FRAME_GEN", L"off");
@@ -2768,12 +2760,6 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         if (ctl.kind == Kind::Toggle) {
           ctl.sel = !ctl.sel;
-          if (c == g_vrexp) {  // VR fork: the experimental card appears or goes; the rest stays where it is
-            Layout();
-            // Shown below the window's foot: scrolled into view (it ends its column, at the bottom of the page).
-            g_scroll = ctl.sel ? MaxScroll() : (std::min)(g_scroll, MaxScroll());
-            g_oy = ContentOy();
-          }
           if (ctl.patches[0] == "@skipgpu") {
             g_skip_gpu_check = ctl.sel != 0;
             if (!GpuBlocked() && g_status == g_gpu_problem) g_status.clear();
