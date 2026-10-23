@@ -239,6 +239,23 @@ SharpenSettings Sharpening() {
     return settings;
 }
 
+// VR fork: TV gamma, as upstream 0.3.0's flat presenter (feab068): DriveClub was graded for TVs decoding with gamma 2.4,
+// headsets (as PC displays) decode sRGB, about 2.2, so the picture looked washed out. Each eye's encoded values to the
+// power 2.4 / 2.2, in the LumaSharpen pass (the scene; the HUD layer keeps its own). BB_VR_TV_GAMMA=1 starts with it
+// on (=<gamma>: that TV gamma instead of 2.4); F11 turns it on and off while playing (Matt 2026-10-23: an A/B).
+std::atomic<bool> g_tv_gamma_on{[] {
+    const char* v = std::getenv("BB_VR_TV_GAMMA");
+    return v && v[0] && v[0] != '0';
+}()};
+float TvGammaPower() {
+    static const float target = [] {
+        const char* v = std::getenv("BB_VR_TV_GAMMA");
+        const float g = v ? float(std::atof(v)) : 0.0f;
+        return g >= 1.8f && g <= 3.0f ? g : 2.4f;
+    }();
+    return g_tv_gamma_on.load(std::memory_order_relaxed) ? target / 2.2f : 1.0f;
+}
+
 struct Push {
     s32 width, height, depth_width, depth_height;
     float k;
@@ -1078,12 +1095,20 @@ void RecordEyes(vk::CommandBuffer command_buffer, const Frame& frame, const VkIm
         // Multiview: each eye's own scene straight into the headset's image (one copy per eye, bit for bit: the
         // scene is gamma-encoded already). With sharpening, LumaSharpen into an eye image first, copied from there.
         const SharpenSettings sharpen = Sharpening();
+        const float power = TvGammaPower();
+        static float logged_power = 1.0f;
+        if (power != logged_power) {
+            logged_power = power;
+            char text[64];
+            std::snprintf(text, sizeof(text), "TV gamma: power %.3f on each eye", power);
+            Log(text);
+        }
         for (int eye = 0; eye < 2; ++eye) {
             const VkImage scene = eye ? slot.scene_right.image : slot.scene.image;
             const VkImageLayout scene_layout = eye ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
             VkImage source = scene;
             VkImageLayout source_layout = scene_layout;
-            if (sharpen.strength > 0.0f && g.sharpen &&
+            if ((sharpen.strength > 0.0f || power != 1.0f) && g.sharpen &&
                 Make(g.eyes[eye], VK_FORMAT_R8G8B8A8_UNORM, w, h,
                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
                 Barrier(cmd, scene, scene_layout, VK_IMAGE_LAYOUT_GENERAL);
@@ -1098,8 +1123,8 @@ void RecordEyes(vk::CommandBuffer command_buffer, const Frame& frame, const VkIm
                              VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dst_info, nullptr, nullptr};
                 const struct {
                     s32 width, height;
-                    float strength, limit, pad[4];
-                } push{s32(w), s32(h), sharpen.strength, sharpen.limit, {}};
+                    float strength, limit, power, pad[3];
+                } push{s32(w), s32(h), sharpen.strength, sharpen.limit, power, {}};
                 VKD.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.sharpen);
                 VKD.vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.sharpen_pipeline_layout, 0, 2,
                                               writes);
@@ -1190,6 +1215,14 @@ void RecordEyes(vk::CommandBuffer command_buffer, const Frame& frame, const VkIm
         }
         Barrier(cmd, hud, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
+}
+
+void ToggleTvGamma() {
+    const bool on = !g_tv_gamma_on.load(std::memory_order_relaxed);
+    g_tv_gamma_on.store(on, std::memory_order_relaxed);
+    char text[64];
+    std::snprintf(text, sizeof(text), "TV gamma %s (power %.3f)", on ? "on" : "off", TvGammaPower());
+    Log(text);
 }
 
 void RecordMirror(vk::CommandBuffer command_buffer, const Frame& frame, VkImage window, u32 window_width,

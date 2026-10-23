@@ -111,6 +111,9 @@ bool TakeFrame(Frame& frame);
 /// (the depth reprojection, see vr_stereo.comp).
 void RecordEyes(vk::CommandBuffer cmd, const Frame& frame, const VkImage (&eyes)[2], const float (&k)[2], VkImage hud);
 
+/// The headset's thread, F11: TV gamma on or off (see vr_stereo.cpp TvGammaPower).
+void ToggleTvGamma();
+
 /// Presenter: the desktop window's image (`window`, TRANSFER_DST): the frame's scene with its HUD, fitted.
 void RecordMirror(vk::CommandBuffer cmd, const Frame& frame, VkImage window, u32 window_width, u32 window_height);
 

@@ -1061,6 +1061,13 @@ void RecordFrame(vk::CommandBuffer cmd, vk::Image frame, u32 width, u32 height, 
         Recenter();
     }
     f8_down = f8;
+    // F11: TV gamma on or off (vr_stereo.cpp).
+    static bool f11_down = false;
+    const bool f11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+    if (f11 && !f11_down) {
+        Stereo::ToggleTvGamma();
+    }
+    f11_down = f11;
 #endif
     g.pending = {};
     if (!g.session) {

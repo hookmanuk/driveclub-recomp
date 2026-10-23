@@ -3,6 +3,7 @@
 // gets (gamma-encoded, after the game's tone mapping). The difference from a blurred copy is taken as brightness
 // only (no colour fringes), scaled by the strength and limited to +-limit (no hard halos), and added to the pixel.
 // The blur is LumaSharpen's default pattern, four bilinear taps half a pixel out: a 3x3 [1 2 1] kernel.
+// Then TV gamma (vr_stereo.cpp TvGammaPower): the encoded values to a power, as upstream's flat presenter does.
 #version 450
 
 layout(local_size_x = 16, local_size_y = 8) in;
@@ -11,7 +12,8 @@ layout(push_constant) uniform Constants {
     ivec2 size;
     float strength; // LumaSharpen's sharp_strength (0.65 is its default)
     float limit;    // LumaSharpen's sharp_clamp: the most a pixel changes (0.035)
-    float pad[4];
+    float power;    // TV gamma on the encoded values (2.4 / 2.2), else 1
+    float pad[3];
 };
 
 layout(binding = 0, rgba8) uniform readonly image2D src;
@@ -35,5 +37,6 @@ void main() {
     const vec3 luma = vec3(0.0722, 0.7152, 0.2126) * strength;
     float sharp = clamp(dot(centre.rgb - blur, luma) * (0.5 / limit) + 0.5, 0.0, 1.0);
     sharp = 2.0 * limit * sharp - limit;
-    imageStore(dst, p, vec4(centre.rgb + sharp, centre.a));
+    const vec3 sharpened = clamp(centre.rgb + sharp, 0.0, 1.0);
+    imageStore(dst, p, vec4(power == 1.0 ? sharpened : pow(sharpened, vec3(power)), centre.a));
 }
